@@ -1,0 +1,50 @@
+This file describes the tests for the pmosaic and photomean software. All
+tests and benchmarks should be run from the t/ directory where the test
+scripts live. Sample library and source images should live in img/ under this
+directory. The test scripts themselves expect to find the pmosaic and
+photomean scripts in the parent directory:
+
+  /path/to/scripts/pmosaic
+                   photomean
+                   t/pmosaic.t
+                     photomean.t
+                     photomean.t
+                     img/    # sample library and source images
+
+
+pmosaic.t
+---------
+This test suite verifies correct functionality of the pmosaic software.
+Several scenarios are run to test basic photomosaic creation, including
+interrupting and subsequently continuing processes.
+
+
+photomean.t
+-----------
+This test suite verifies correct functionality of the photomean software. 
+
+
+mosaic-profile.sh
+-----------------
+This script profiles the pmosaic software.
+
+
+mosaic-tolerance-compare.sh
+-----------------------------
+This is used to benchmark the pmosaic software for various tolerance values.
+
+
+Sample Images
+-------------
+The testcard.png image was created by drawing a black rectangle then colouring
+the lower and right edges white. The middle of the rectangle was then filled in
+with two gradients - full spectrum in the top half, and white-to-black
+greyscale in the bottom half. This image was then used to generate a png for
+each colour found in the gradients (including black and white). These pngs are
+used as the photo library for testing and benchmarking.
+
+testcardr.png is a copy of testcard.png with the central gradients reversed.
+
+The pmosaic-index-munged in the t/ directory has deliberately had random bits
+flipped for each colour. This is so the pick_best_match() function will
+perform a full search, for benchmarking purposes.

@@ -1,0 +1,537 @@
+#!/usr/bin/perl
+# No warnings - otherwise it gripes about 'gimp_file_load' etc being
+# redefined.
+
+#	(C) Simon Drabble	2004-06-21
+#	gimp@thebigmachine.org
+#	$Id: pmosaic,v 1.9 2004/07/12 15:05:11 simon Exp $
+#
+
+
+# TODO:
+# [ ] 1. Allow different source-pixel sizes (cell-sizes)
+#       1a. Different sampling methods
+# [X] 2. Allow stop/ start (save state between invocations)
+#       2a. Clustering?
+# [?] 3. Speed up main loop (pick_best_image)
+# [ ] 4. Output file selection (-o won't work: new_img != img)
+# [ ] 5. Collect statistics on each PM (optional)
+#    number of library photos used vs. total in library
+#    number of exact matches
+#    average search time
+#    etc
+# [ ] 6. Complete function documentation!
+
+
+
+use Gimp ":auto";
+use Gimp::Fu;
+use File::Spec qw(splitpath);
+
+use strict;
+
+our $VERSION = '0.2';
+
+my $rc_dir = "$ENV{HOME}/.photomosaic";
+mkdir $rc_dir unless -d $rc_dir;
+
+my $state_file = "$rc_dir/pm_state.conf";
+
+my $sig_recvd = 0;
+
+# A lower tolerance will take longer to process but result in a better match.
+# This is a global so we don't have to pass it around to each function
+# (including 'register')
+my $tolerance = 15; 
+
+# If collecting statistics, and the file to dump them to.
+my $statistics = 0;
+my $stat_file;
+
+
+# Would have like to have done this with INT, but that affects GIMP/Perl-fu
+# server, so is no good when running this script in batch.
+$SIG{USR1} = sub { ++$sig_recvd };
+
+
+sub pmosaic_run
+{
+	my ($imgfile, $index, $sfile, $tol, $cont, $paranoid, $disp, $stats) = @_;
+
+	$tolerance  = $tol;
+	$statistics = $stats;
+	$state_file = $sfile;
+
+	if ($statistics) {
+		open $stat_file, ">$imgfile.statistics";
+	}
+
+	if (!$index) {
+		die "No library index provided. I go no further";
+	}
+
+	my %map = read_index($index);
+	
+	my ($img, $drw);                 # Source img, drawable.
+	my ($new_img, $layer, $display); # Target img, drawable, display.
+	my ($wd, $ht);                   # Width & height.
+	my ($startx, $starty) = (0, 0);  # Where to start processing in source.
+
+	my $xscale = 20;
+	my $yscale = 20;
+
+	if ($imgfile) {
+		warn "Attempting to load $imgfile.\n";
+	} else {
+		warn "No imgfile specified, will look for interrupted mosaics.\n";
+	}
+
+	my ($src, $tgt, $vars);
+
+	warn "*** TODO: Write tests for interrupt vs. continue (+/- imgfile) ***\n";
+	warn "*** TODO: Document QUIT vs INT vs USR1 (and warn user..) ***\n";
+	warn "*** TODO: Document how large output might be! ***\n";
+
+# If imgfile is interrupted, automatically continue it. 
+# If imgfile was not provided, continue the first interrupted mosaic found
+# if continue is true.
+	if ((($src, $tgt, $vars) = read_state($state_file, $imgfile)) &&
+			$cont &&
+			(!$imgfile || $src eq make_abs_path($imgfile))) {
+
+		warn "Trying to continue interrupted mosaic '$src'\n";
+		$imgfile ||= $src;
+		# We read an interrupted entry from the state file. Initialise values.
+		($new_img, $layer) = read_file($tgt);
+
+# Hmm.. TODO: might the user want to continue with a different tolerance?
+		($startx, $starty, $xscale, $yscale, $tolerance) = split ',', $vars;
+
+# TODO: Proper init procedure - make initialisation sane.
+		$img = gimp_file_load($src, $src); 
+		$drw = $img->get_active_layer;
+		$wd = $drw->width;
+		$ht = $drw->height;
+
+	} elsif ($imgfile) {
+
+ 		$img = gimp_file_load($imgfile, $imgfile); 
+		$drw = $img->get_active_layer;
+		$wd = $drw->width;
+		$ht = $drw->height;
+
+		if (!$cont && $src) {
+			warn "Chosen to re-start '$src' (-continue = 0)\n";
+		}
+
+		# Start a new image.
+		$new_img = gimp_image_new($wd * $xscale, $ht * $yscale, RGB);
+		$layer = $new_img->layer_new(
+				$wd * $xscale, $ht * $yscale,
+				RGBA_IMAGE,
+				"New Layer",
+				100,
+				NORMAL_MODE);
+		$layer->edit_clear;
+		$new_img->add_layer($layer, -1);
+
+	} else {
+		warn "No imgfile specified and no interrupted photomosaics found.  Bailing..\n";
+		exit 0;
+	}
+
+# Display-while-process takes approx twice as long as with no display,
+# according to Benchmark.
+	if ($disp) {
+		$display = $new_img->display_new;
+	}
+
+
+ALICE:
+	for my $j ($starty..$ht-1) {
+		# Complete the row (if continuing an interrupted image)
+		for my $i ($startx..$wd-1) {
+			# Now reset startx to the beginning of the row
+			$startx = 0;
+			my ($r, $g, $b) = get_tile_value($drw, $i, $j, 1, 1);
+			my ($pic, $rgb) = pick_best_match(\%map, $r, $g, $b);
+			if ($pic) {
+#				warn sprintf "$i, $j: $pic (%02x%02x%02x) -> ($rgb)\n", $r,$g,$b;
+				add_to_image($new_img, $layer, $i, $j, $pic, $xscale, $yscale);
+			}
+
+			if ($sig_recvd) {
+				my  $outfile = save_temp_image($new_img, $layer, $img->get_filename());
+				save_state($img->get_filename(), 0, $j, $xscale, $yscale, $outfile);
+				last ALICE;
+			}
+
+		}  # loop over columns
+
+		print STDERR "Processed row $j/ $ht\n";
+
+		if ($paranoid || !(($j+1) % 25)) {
+			my $outfile = save_temp_image($new_img, $layer, $img->get_filename());
+			save_state($img->get_filename(), 0, $j+1, $xscale, $yscale, $outfile);
+		}  # Paranoia!
+
+		if ($ENV{PMOSAIC_TEST_SWITCH}) {
+			kill 'USR1' => $ENV{PMOSAIC_TEST_SWITCH};
+		}
+
+	}  # loop over rows
+
+	save_image($new_img, $layer, $img->get_filename());
+
+# If mosaic completed (no signal was received), remove temporary file (if any)
+# and entry from state file (also if any).
+	if (!$sig_recvd && $src eq make_abs_path($img->get_filename())) {
+		unlink $tgt if $tgt && -e $tgt;
+		remove_state($src, $state_file);
+	}
+
+# Remove the display, if one was created.
+	if ($disp && $display) {
+		$display->delete; # Also deletes image, since we created it.
+	} else {
+		$new_img->delete;
+	}
+
+# Tidy up.
+	if ($statistics && $stat_file) {
+		close $stat_file;
+	}
+
+	return $img;
+}
+
+
+
+
+sub get_tile_value
+{
+	my ($drw, $x, $y, $w, $h) = @_;
+	my ($r, $g, $b) = (0) x 3;
+	for my $j ($y..$y+$h-1) {
+		for my $i ($x..$x+$w-1) {
+			my ($pr, $pg, $pb) = $drw->get_pixel($i, $j);
+			$r += $pr;
+			$g += $pg;
+			$b += $pb;
+		}
+	}
+	my $mul = $w x $h;
+	$r /= $mul;
+	$g /= $mul;
+	$b /= $mul;
+	if ($statistics && $stat_file) {
+		print $stat_file "This is for tile at $x, $y of ($w x $h)\n";
+	}
+	return wantarray ? ($r, $g, $b) : ($r << 16) + ($g << 8) + $b;
+}
+
+
+
+
+sub save_state
+{
+	my ($filename, $row, $col, $xscale, $yscale, $tmpfile) = @_;
+# BUG: XXX:
+# If the filename is relative, prepend the current directory. This will be
+# where the gimp is launched from, not from where the plugin script is
+# run.
+	$filename = make_abs_path($filename);
+
+	my ($state, $src, $tgt, $vars);
+# XXX Race condition if two photomosaics are occurring at the same time!
+	if (!open O, ">>$state_file.__tmp__") {
+		warn "Unable to save state to $state_file: $!";
+		return;
+	}
+
+# Store info including location of temporary .xcf in state file
+	my $outstr = "I:$filename:$tmpfile:$row,$col,$xscale,$yscale,$tolerance";
+
+	my $was_written = 0;
+# Check for existing state for file - we only store one state per file.
+
+	if (open I, "<$state_file") {
+		while (<I>) {
+			chomp;
+			($state, $src, $tgt, $vars) = split /:/;
+			if ($src eq $filename) {
+				print O "$outstr\n";
+				$was_written = 1;
+			} else {
+				print O "$_\n";
+			}
+		}
+		close I;
+	}
+	if (!$was_written) {
+		print O "$outstr\n";
+	}
+	close O;
+	rename "$state_file.__tmp__", $state_file;
+}
+
+
+
+
+sub make_abs_path
+{
+	return '' unless my $filename = shift;
+	if ($filename !~ /^\//) {
+		$filename = File::Spec->join("", $ENV{PWD}, $filename);
+	}
+	return $filename;
+}
+
+
+sub remove_state
+{
+	my ($filename, $sfile) = @_;
+	open I, "<$sfile" or return;
+	if (!open O, ">$sfile.__tmp__") {
+		close I;
+		return;
+	}
+	while (<I>) {
+		chomp;
+		my ($state, $src, $tgt, $vars) = split /:/;
+		unless ($src eq $filename) {
+			print O join ':', $state, $src, $tgt, $vars;
+			print O "\n";
+		}
+	}
+	close O;
+	close I;
+	rename "$sfile.__tmp__", $sfile;
+}
+
+
+
+
+sub save_temp_image
+{
+	my ($img, $drw, $filename) = @_;
+	my (undef, undef, $out_file) = File::Spec->splitpath($filename);
+	$out_file =~ s/\.\w+$/.xcf/;
+	$out_file = "$rc_dir/$out_file";
+	warn "Saving temp image to $out_file\n";
+	gimp_xcf_save($$, $img, $drw, $out_file, $out_file);
+	return $out_file;
+}
+
+
+
+sub save_image
+{
+	my ($img, $drw, $filename) = @_;
+	my ($vol, $dirs, $out_file) = File::Spec->splitpath($filename);
+	$out_file = "PM__$out_file";
+	$out_file =~ s/\.\w+$/.xcf/;
+	my $outpath = File::Spec->catpath($vol, $dirs, $out_file);
+	warn "Saving image to $outpath\n";
+	gimp_xcf_save($$, $img, $drw, $outpath, $outpath);
+}
+
+
+
+sub read_state
+{
+	my ($statefile, $file) = @_;
+	my ($state, $src, $tgt, $vars);
+	open F, "<$statefile" or return;
+	while(<F>) {
+		chomp;
+		($state, $src, $tgt, $vars) = split /:/;
+		if (defined $file) {
+			last if $state eq 'I' && $file eq $src;
+		} else {
+			last if $state eq 'I';
+		}
+	}
+	close F;
+
+	if ($state eq 'I') {
+		warn "Incomplete mosaic '$src' found.\n";
+		return ($src, $tgt, $vars);
+	}
+	return;
+}
+
+
+
+sub read_file
+{
+	my ($file) = @_;
+	warn "Loading ($file)\n";
+	my $img = gimp_xcf_load($$, $file, $file) or return;
+	my $drw = $img->get_active_layer;
+	return ($img, $drw);
+}
+
+
+
+sub add_to_image
+{
+	my ($img, $drw, $i, $j, $pic, $w, $h) = @_;
+# Load the specified library image, and get its active layer.
+	my $libimg = gimp_file_load($pic, $pic);
+	my $lyr = $libimg->get_active_layer;
+# Scale the layer to be a new 'pixel', copy, and paste to our target layer.
+	$lyr->scale($w, $h, 0);
+	$lyr->edit_copy;
+	my $nl = $drw->edit_paste(0);
+# Move to top,left (pasted layer is in centre)
+	$nl->translate(-$img->width/2 + ($w/2), -$img->height/2 + ($h/2));
+# And move to correct position.
+	$nl->translate($i * $w, $j * $h);
+	$nl->floating_sel_anchor();
+# Delete the image we don't need no mo
+	$libimg->delete;
+	return 1;
+}
+
+
+
+
+
+sub pick_best_match
+{
+	my ($map, $r, $g, $b) = @_;
+	my $pv = sprintf "%02x%02x%02x", $r, $g, $b;
+	my $pic;
+	my ($rr, $rg, $rb) = ($r,$g,$b);  # 'return' values
+	if ($map->{$pv}) {
+		# Exact match
+		$pic = $map->{$pv}->[rand @{$map->{$pv}}];
+
+	} else {
+
+
+# Current bottleneck. Ways to speed this up?
+# 1. exit with closest match after certain number of tries/ time (could be bad)
+# 2. exit with closest match within certain tolerance
+# 3. pre-add keys to map that are approximate colours. for example if a search
+# is made for a pixel of #ff0000, approx colours might be #f00000 thru #fe0000.
+# Perform these lookups before performing exhaustive search.
+# 4. set pic only once match has been found.
+# 5. some heuristic to determine map keys within a certain range. Only perform
+# exhaustive search if these keys turn up nuffink. This is similar to 2 but
+# partitions the search domain at a higher tolerance first.
+# 6. as we go along, add to a hash values that are similar to the desired
+# colour; this can be used to speed up future searches within this session.
+# This is a combination of 2, 3 and 5, but is adaptive! and dynamic!
+# 7. store this map for re-use in later sessions!
+
+		my $closest   = 0;
+		my $run_total = 999;
+BOBBI:
+		for (keys %$map) {
+# According to Benchmark, this is faster than either a regexp- or substr-based
+# approach. Even a pre-compiled regexp.
+#			my ($mr, $mg, $mb) = unpack "xCCC", pack "N", hex;
+# Aha! but the numeric approach is faster still!
+			my $num = hex;
+			my $mr = ($num >> 16) & 0xff;
+			my $mg = ($num >>  8) & 0xff;
+			my $mb =  $num        & 0xff;
+
+###+++			if ($statistics && $stat_file) {
+###+++				my $ms = sprintf "%02x%02x%02x", $mr,$mg,$mb;
+###+++				my $cs = sprintf "%02x%02x%02x",
+###+++						($run_total >> 16) & 0xff,
+###+++						($run_total >>  8) & 0xff,
+###+++						 $run_total        & 0xff;
+###+++				my $as = sprintf "%02x%02x%02x", abs($mr-$r),abs($mg-$g),abs($mb-$b);
+###+++				print $stat_file "$pv: Looking at ($as) < ($cs)   from ($ms) ($t < $run_total ?)\n";
+###+++			}
+
+
+			# Store the closest match to the chosen colour.
+			# The closest match is given by summing the differences between each
+			# of the r,g,b components for the target pixel and the current
+			# colour under examination. A lower total indicates a closer match.
+			my $t = abs($mr - $r) + abs($mg - $g) + abs($mb - $b);
+			if ($t < $run_total) {
+				$run_total = $t;
+				($rr, $rg, $rb) = ($mr, $mg, $mb);
+				$closest = $_;
+
+# Optimisation 2: exit once a close-enough match has been found. Helps a lot
+# or a little, depending on tolerance, but a higher tolerance (faster) really
+# does bash the final quality.
+# A tolerance of 1 means that this loop will always pick the closest match,
+# but at the expense of processing time.
+				if ($run_total < $tolerance) {
+					last BOBBI;
+				}
+			}  # end if close enough match
+		}  # end loop through map keys
+
+# Optimisation 4: set pic only once search complete. Helped a little.
+		$pic = $map->{$closest}->[rand @{$map->{$closest}}];
+	}  # match?
+
+	if ($statistics && $stat_file) {
+		printf $stat_file "I chose $pic for %02x%02x%02x\n", $rr,$rg,$rb;
+		print $stat_file "============= Done that pixel ================\n";
+	}
+	return wantarray ? ($pic, sprintf"%02x%02x%02x",$rr,$rg,$rb) : $pic;
+}
+
+
+
+sub read_index
+{
+	my $index = shift;
+	my %map;
+	open IDX, $index or die;
+	while (<IDX>) {
+		chomp;
+		next if /^\s*$/;
+# Some entries got banjaxed during indexing :(
+		next if /:[^#]/;
+		my ($file, $val) = split /:#/;
+		push @{$map{$val}}, $file;
+	}
+	close IDX;
+	if (! keys %map) {
+		die "Unable to get library image information. I stop here.";
+	}
+# Map entries are stored as
+#   colour => [ list of images with the same value ]
+# This makes for far faster look-ups than the obverse.
+	return %map;
+}
+
+
+register
+	"perl_fu_pmosaic",                               # fill in name
+	"Creates a photomosaic.",                        # a small description
+	qq{There was a really useful help text here but it broke the GIMP. Please read the README that accompanies this software or visit http://thebigmachine.org/gimp/pmosaic/.}, # a help text
+	"Simon Drabble <gimp\@thebigmachine.org>",         # Your name
+	"(c) Simon Drabble <gimp\@thebigmachine.org>",     # Your copyright
+	"2004/06/21",                            # Date
+	"<Toolbox>/Xtns/Perl-Fu/pmosaic",               # menu path
+	"*",                                               # Image types
+	[
+		[PF_FILE,   "imgfile",    "Image File",                                 ""],
+		[PF_FILE,   "index",      "Index",         "$ENV{HOME}/.photomosaic/index"],
+		[PF_FILE,   "state",      "State File",                        $state_file],
+		[PF_SLIDER, "tolerance",  "Tolerance (higher = faster but less accurate)",
+			$tolerance, [1, 255, 1, 5, 10 ]
+		],
+		[PF_BOOL,   "continue",   "Continue interrupted PhotoMosaic (if found)", 1],
+		[PF_BOOL,   "paranoid",   "Paranoid (slower!)",                          0],
+		[PF_BOOL,   "display",    "Display (slower!)",                           0],
+		[PF_BOOL,   "statistics", "Collect statistics",                          0],
+	],
+	\&pmosaic_run;
+
+exit main();
+
+
+__END__

@@ -1,0 +1,58 @@
+#!/usr/bin/perl -w
+#	(C) Simon Drabble	2004-06-19
+#	gimp@thebigmachine.org
+#	$Id: photomean,v 1.4 2004/07/12 15:05:11 simon Exp $
+#
+
+
+use Gimp qw(:auto :const);
+use Gimp::Fu;
+
+use strict;
+
+sub photomean_run
+{
+	my ($file) = @_;
+	return unless $file;
+	my $img = gimp_file_load($file, $file);
+	die "Couldn't load $file" unless $img;
+	my $drw = $img->get_active_layer();
+	if (!$drw) {
+		$drw = ($img->get_layers)[0];
+	}
+
+	my $wd = $drw->width;
+	my $ht = $drw->height;
+
+	if ($img->base_type() eq GRAY) {
+		$img->convert_rgb();
+	}
+	my $r = $drw->histogram(HISTOGRAM_RED,   0, 255);
+	my $g = $drw->histogram(HISTOGRAM_GREEN, 0, 255);
+	my $b = $drw->histogram(HISTOGRAM_BLUE,  0, 255);
+	my $pv = ($r << 16) + ($g << 8) + ($b);
+	printf "$file:#%06x\n", $pv;
+
+	$img->delete; # dispose of the loaded image
+	return;
+}
+
+
+register
+	"perl_fu_photomean",                                 # fill in name
+	"Calculates the average pixel value of an image.",   # a small description
+	qq{Calculates the average pixel value of an image, suitable for use in PhotoMosaic software (pmosaic). The value is written to stdout along with the image filename.  Images should be RGB or RGB-A (although alpha is not taken into account), and flattened for best results.}, # a help text
+	"Simon Drabble <gimp\@thebigmachine.org>",         # Your name
+	"(c) Simon Drabble <gimp\@thebigmachine.org>",     # Your copyright
+	"photomean 2004/06/19",                            # Date
+	"<Toolbox>/Xtns/Perl-Fu/photomean",                   # menu path
+	"*",                                               # Image types
+	[
+		[PF_FILE,   "file",          "File",                  ""],
+	],
+	\&photomean_run;
+
+exit main();
+
+
+__END__

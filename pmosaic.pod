@@ -1,0 +1,108 @@
+=head1 NAME
+
+pmosaic - GIMP plug-in to produce photomosaic pictures.
+
+=head1 SYNOPSIS
+
+Copy to your GIMP plug-ins directory. Run as either
+
+	/path/to/pmosaic -imgfile /path/to/source_imagefile [options]
+
+or from the Toolbox/Xtns/Perl-Fu menu within GIMP.
+
+The plug-in is intended to be run from the command-line primarily since
+photomosaic creation can take a long time, and it is expected that it will
+generally be performed in batch - that's how I do it, anyway.
+
+=head1 ABSTRACT
+
+Creates a photomosaic for a source image given the index of a photo library.
+
+=head1 DESCRIPTION
+
+Nomenclature:
+
+Source:  The base image used to generate a photomosaic.
+
+Target:  The resulting photomosaic.
+
+Library: The photos used to replace pixels in the source to become the target.
+
+Each entry in the library index should consist of a filename and the
+average pixel value for the file, separated by a colon, for example
+	
+/path/to/image.jpg:#ff003d
+
+The 'photomean' perl-fu which should accompany this software can be used to generate entries in this form.  Entries in the photo library can be in any format loadable by GIMP. For images that have layers, only the active layer is used when copying to the target. This may be different from the layer used to calculate the pixel average (input to photomean), which is bad. Images loaded from the library are scaled before being used, but are not written back out to disk.
+
+Options:
+
+The 'imgfile' parameter specified the source image from which to make a photomosaic.
+
+The 'index' parameter specifies the library index file to use. This is something that can be easily generated with the photomean perl-fu.
+
+The 'state' parameter identifies the file to be used to read/ store interrupted photomosaic state.
+
+The 'tolerance' parameter is used to specify how close a library photo must
+match the source pixel. Lower values mean the colours must be closer, but
+prcessing will take longer - the search ends once a library photo is
+found that has a colour within the tolerance value of the source pixel.
+
+The 'continue' option tells the script whether to continue an interrupted pmosaic. If the specified source is found in the state file with an 'interrupted' status, and 'continue' is true, the mosaic will start from where it left off last time. If 'continue' is false, the mosaic will be restarted from the beginning.
+
+The 'continue' option tells the script what to do if an interrupted pmosaic is found. If continue is true and the imgfile parameter was provided, the specified imgfile will be continued if it was interrupted on a prior run. If continue is true but no imgfile parameter is provided, the first interrupted photomosaic will be continued. If continue is false, interrupted photomosaics are ignored, and if imgfile is specified, the target will be started from the beginning.
+
+Use 'paranoid' to specify that the generated target be written out to disk after every row is processed. If 'paranoid' is set to false, the target will only be written to disk every 25 rows, or if the process is interrupted by a USR1 signal.
+The 'display' option is used to cause the target to be displayed as it is being created. This is extremely slow so is disabled by default.
+
+The 'statistics' parameter can be used to collect statistics for the pmosaic run. This option is largely non-functional currently.
+
+
+Visit the pmosaic home page at <http://thebigmachine.org/gimp/pmosaic> for samples and benchmarks.
+
+
+=head1 FUNCTIONS
+
+=over 4
+
+=item ($r, $g, $b) = get_tile_value($x, $y, $w, $h);
+
+Returns the aggregate value for the pixels in tile of size $w, $h at $x, $y.
+$w x $h should be < 256.
+
+
+=item ($src, $tgt, $vars) = read_state($statefile, $imgfile);
+
+Checks if an incomplete state entry exists in $statefile, returning the first
+one found.
+If $imgfile is defined, checks explicitly for an entry matching, and returns it
+only if found - returns undef if not.
+
+=item %map = read_index($file);
+
+Reads the specified index file. This file is the index to your image library.
+
+Each line should be in the format
+
+/path/to/an/image.file:#rrggbb
+
+I.e. the output from `photomean'.
+
+=back
+
+=head1 SEE ALSO
+
+photomean, Gimp::Fu
+
+=head1 AUTHOR
+
+Simon Drabble, E<lt>gimp@thebigmachine.orgE<gt>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2004  Simon Drabble
+
+This script is free software; you may redistribute it and/or modify 
+it under the same terms as Perl itself.
+
+=cut

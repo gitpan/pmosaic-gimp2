@@ -1,0 +1,70 @@
+Introduction
+============
+
+This software can be used to generate PhotoMosaics - that is, images which are
+themselves composed of hundreds or thousands of tiny images. It is still in
+early developmental stages but is perfectly usable.
+
+This version of PhotoMosaic is for GIMP v2. I do not know if it is compatible
+with GIMP v1.x. If necessary you can get a version that works with GIMP v1
+from my CPAN directory (CPAN ID = SDRABBLE).
+
+
+Installation
+============
+
+Untar the package file to your GIMP directory:
+
+  $  cd ~/.gimp-2.0/
+  $  gunzip -c /path/to/<PMOSAIC>.tar.gz | tar xf - 
+
+(replace <PMOSAIC> in the above command with the full version number from the
+filename)
+
+The software will be extracted to the 'plug-ins' directory.
+
+Before using the photomosaic software please run at least the pmosaic.t and
+photomean.t tests to verify correct installation and functionality. These can
+be found in the t/ directory from wherever you untarred the package.
+
+  $  cd plug-ins/t
+  $  perl ./photomean.t
+  $  perl ./pmosaic.t
+
+Note you can also use the 'runtests' script in the t/ directory.
+
+These tests may take a while to run depending on the speed and other
+configuration of your system.
+
+If everything passes you are all set! If not, I'll be glad to work with you to
+get it running.
+
+
+Using the Software
+==================
+
+Start GIMP. You should see two new options on the Xtns/Perl-Fu menu of the
+main toolbox. 
+
+  photomean
+
+and
+
+  pmosaic
+
+Although these are provided in the GIMP's menu system it is recommended for
+performance reasons that they be run from the command-line or in batch. See
+the in-line documentation for full details.
+
+
+Creating Mosaics
+================
+
+For best results, the more photos in your library the better. I recommend
+around 4000 at an absolute minimum. 7-8000 should be adequate.
+
+If you create any really nice photomosaics with this software email the author
+and I'll consider adding them to the pmosaic home page at
+http://thebigmachine.org/gimp/pmosaic/
+
+Happy Mosaicking!

@@ -1,0 +1,41 @@
+
+
+=head1 NAME
+
+photomean - GIMP plug-in to calculate average pixel-value for an image. Used
+in the production of photomosaic pictures.
+
+=head1 SYNOPSIS
+
+Copy to your GIMP plug-ins directory. Run as either
+
+	/path/to/photomean -file /path/to/imagefile 
+
+or from the Toolbox/Xtns/Perl-Fu menu within GIMP.
+
+=head1 ABSTRACT
+
+This script calculates the average pixel value of an image. The image should
+be in RGB or RGB-A format - greyscale images are first converted. Only the
+active layer of the image will be used.
+
+The pixel value is output to stdout along with the filename, and this can be
+used verbatim as an entry in a library index file for pmosaic, which should
+accompany this software.
+
+=head1 SEE ALSO
+
+pmosaic, Gimp::Fu
+
+=head1 AUTHOR
+
+Simon Drabble, E<lt>gimp@thebigmachine.orgE<gt>
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (C) 2004  Simon Drabble
+
+This script is free software; you may redistribute it and/or modify 
+it under the same terms as Perl itself.
+
+=cut
